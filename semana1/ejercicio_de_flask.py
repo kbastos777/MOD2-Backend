@@ -20,7 +20,6 @@ def write_json_file(filename,data):
         with open(filename, "a") as file:
                 file.write("\n")
                 json.dump(data, file)
-                
 
 
 def list_tasks(file_path):
@@ -49,6 +48,7 @@ def get_task():
 @app.route("/tasks",methods=["POST"])
 def create_new_task():
     try:
+        tasks_list = list_tasks('json_file.json')
         identifier = request.form.get("identifier")
         title = request.form.get("title")
         description = request.form.get("description")
@@ -59,33 +59,41 @@ def create_new_task():
             'description':description,
             'status':status
         } 
-        if status != "pending" or status != "in progress" or status != "completed":
-            raise ValueError("Please enter only the current 3 available status:(pending, in progress or completed)")
+        
+        
         if not all([identifier,title,description,status]):
+            return jsonify(message="no empty spaces allowed"), 400
+        elif status not in (["pending", "in progress", "completed"]):
+            raise ValueError("Please enter only the current 3 available status:(pending, in progress or completed)")
+        elif any(task['identifier'] == identifier for task in tasks_list):
+            raise ValueError("Please enter an unique identifier")
+        write_json_file('json_file.json',tasks_dict)
+        return tasks_dict
+    except ValueError as err:
+        return jsonify(message=str(err)), 400
+
+
+@app.route("/tasks",methods=["PUT"])
+def edit_json_file():
+    try:
+        identifier = request.form.get("identifier")
+        title = request.form.get("title")
+        description = request.form.get("description")
+        status = request.form.get("status")
+        tasks_dict = {
+            'identifier': identifier,
+            'title': title,
+            'description':description,
+            'status':status
+        }
+        if status not in (["pending", "in progress", "completed"]):
+            raise ValueError("Please enter only the current 3 available status:(pending, in progress or completed)")
+        if not identifier or not title or not description or not status:
             return jsonify(message="no empty spaces allowed"), 400
         write_json_file('json_file.json',tasks_dict)
         return tasks_dict
     except ValueError as err:
         return jsonify(message=str(err)), 400
-        
-
-
-@app.route("/tasks",methods=["PUT"])
-def edit_json_file():
-    identifier = request.form.get("identifier")
-    title = request.form.get("title")
-    description = request.form.get("description")
-    status = request.form.get("status")
-    tasks_dict = {
-        'identifier': identifier,
-        'title': title,
-        'description':description,
-        'status':status
-    } 
-    if not identifier or not title or not description or not status:
-        return jsonify(message="no empty spaces allowed"), 400
-    write_json_file('json_file.json',tasks_dict)
-    return tasks_dict
 
 
 @app.route("/tasks",methods=["DELETE"])
