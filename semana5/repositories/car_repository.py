@@ -96,7 +96,7 @@ class CarRepository:
     def update(self,_id,brand,model,year,state):
         try:
             self.db_manager.execute_query(
-                "UPDATE lyfter_car_rental.Users SET (brand,model,year,state) = (%s,%s,%s,%s) WHERE ID = %s",
+                "UPDATE lyfter_car_rental.Cars SET (brand,model,year,state) = (%s,%s,%s,%s) WHERE ID = %s",
                 brand,model,year,state,_id
             )
             print("Car updated successfully")
