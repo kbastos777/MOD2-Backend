@@ -1,6 +1,6 @@
 from flask import Flask, request, Response, jsonify
 from db import DB_Manager
-from semana7.jwt_manager import JWT_Manager
+from jwt_manager import JWT_Manager
 from repositories import ContactsRepository, RolesRepository,UsersRepository,FruitsRepository,BillsRepository,BillsXfruitsRepository,LoginHistoryRepository
 
 with open("private.pem", "rb") as file:
