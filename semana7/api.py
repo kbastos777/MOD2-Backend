@@ -551,7 +551,7 @@ def find_contact_by_user_id():
         if result == []:
             return Response("No contacts found", status=404)
 
-        return jsonify(token=result)
+        return jsonify(token=token)
     except Exception as e:
         print("Error:", e)
         return Response("Internal server error", status=500)
@@ -595,7 +595,7 @@ def login_history():
         if history == []:
             return Response("No login history found",status=404)
 
-        return jsonify(login_history=history)
+        return jsonify(token=token)
     except Exception as e:
         print("Error:", e)
         return Response("Internal server error", status=500)
