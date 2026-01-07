@@ -1,4 +1,5 @@
-from flask import Flask, request, Response, jsonify
+from flask import Flask, request, Response, jsonify, g
+from functools import wraps
 from db import DB_Manager
 from jwt_manager import JWT_Manager
 from repositories import ContactsRepository, RolesRepository,UsersRepository,FruitsRepository,BillsRepository,BillsXfruitsRepository,LoginHistoryRepository
@@ -13,6 +14,66 @@ app = Flask("user-service")
 db_manager = DB_Manager()
 jwt_manager = JWT_Manager(private_key=private_key, public_key=public_key, algorithm="RS256")
 
+def _get_auth():
+    token = request.headers.get('Authorization')
+    if not token:
+        return None, Response("Missing token", status=403)
+    token = token.replace("Bearer ", "")
+    decoded = jwt_manager.decode(token)
+    if decoded is None or 'id' not in decoded:
+        return None, Response("Invalid token", status=403)
+    user_id = decoded['id']
+    user_repo = UsersRepository()
+    user = user_repo.get_user_by_id(user_id)
+    if user is None:
+        return None, Response("User not found", status=404)
+    role_repo = RolesRepository()
+    role = role_repo.get_role_by_id(user['role'])
+    return (user, role, user_id), None
+
+def auth_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        auth, err = _get_auth()
+        if err:
+            return err
+        user, role, user_id = auth
+        g.current_user = user
+        g.current_role = role
+        g.current_user_id = user_id
+        return f(*args, **kwargs)
+    return wrapper
+
+def admin_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        auth, err = _get_auth()
+        if err:
+            return err
+        user, role, user_id = auth
+        if role is None or role.role_name.lower() != "admin":
+            return Response("You are not authorized to perform this action", status=403)
+        g.current_user = user
+        g.current_role = role
+        g.current_user_id = user_id
+        return f(*args, **kwargs)
+    return wrapper
+
+def admin_or_user_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        auth, err = _get_auth()
+        if err:
+            return err
+        user, role, user_id = auth
+        if role is None or (role.role_name.lower() != "admin" and role.role_name.lower() != "user"):
+            return Response("You are not authorized to perform this action", status=403)
+        g.current_user = user
+        g.current_role = role
+        g.current_user_id = user_id
+        return f(*args, **kwargs)
+    return wrapper
+
 @app.route("/liveness")
 def liveness():
     return "<p>Hello, World!</p>"
@@ -20,34 +81,14 @@ def liveness():
 # CREATE ROLES
 
 @app.route('/register_role', methods=['POST']) #Before running enter the admin and users roles directly using PostgreSQL
+@admin_required
 def create_roles():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or role.role_name.lower() != "admin":
-            return Response("You are not authorized to perform this action", status=403)
-
         data = request.get_json()
         if data.get('role_name') is None:
             return Response("You must provide a role name", status=400)
 
+        role_repo = RolesRepository()
         result = role_repo.insert_role(data.get('role_name'))
         role_id = result[0]
         
@@ -80,30 +121,9 @@ def create_user():
 # READ USER BY ID
 
 @app.route('/find_user_by_id', methods=['GET'])
+@admin_required
 def find_user_by_id():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or role.role_name.lower() != "admin":
-            return Response("You are not authorized to perform this action", status=403)
-
         data = request.get_json()
         user_id = data.get('id')
 
@@ -126,30 +146,9 @@ def find_user_by_id():
 # CREATE FRUITS
 
 @app.route('/register_fruit', methods=['POST'])
+@admin_or_user_required
 def create_fruit():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or (role.role_name.lower() != "admin" and role.role_name.lower() != "user"):
-            return Response("You are not authorized to perform this action", status=403)
-        
         data = request.get_json()
         if None in (data.get('name'), data.get('price'), data.get('entry_date'), data.get('quantity')):
             return Response("You must provide a name, price, entry_date and quantity", status=400)
@@ -169,30 +168,9 @@ def create_fruit():
 # FIND FRUIT BY ID
     
 @app.route('/find_fruit_by_id', methods=['GET'])
+@admin_required
 def find_fruit_by_id():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or role.role_name.lower() != "admin":
-            return Response("You are not authorized to perform this action", status=403)
-        
         data = request.get_json()
         fruit_id = data.get('id')
 
@@ -215,30 +193,9 @@ def find_fruit_by_id():
 # UPDATE FRUIT
 
 @app.route('/update_fruit', methods=['PUT'])
+@admin_required
 def update_fruit():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or role.role_name.lower() != "admin":
-            return Response("You are not authorized to perform this action", status=403)
-        
         data = request.get_json()
         if None in (data.get('id'), data.get('name'), data.get('price'), data.get('entry_date'), data.get('quantity')):
             return Response("You must provide a name, price, entry_date and quantity", status=400)
@@ -258,29 +215,9 @@ def update_fruit():
 # DELETE FRUIT
 
 @app.route('/delete_fruit', methods=['DELETE'])
+@admin_required
 def delete_fruit():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or role.role_name.lower() != "admin":
-            return Response("You are not authorized to perform this action", status=403)
         data = request.get_json()
         if (data.get('id') == None):
             return Response("You must provide a fruit id", status=400)
@@ -300,30 +237,9 @@ def delete_fruit():
 # CREATE BILLS
 
 @app.route('/create_bill', methods=['POST'])
+@admin_or_user_required
 def create_bill():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or (role.role_name.lower() != "admin" and role.role_name.lower() != "user"):
-            return Response("You are not authorized to perform this action", status=403)
-        
         bill_repo = BillsRepository()
         result = bill_repo.insert_bill()
         bill_id = result[0]
@@ -340,29 +256,9 @@ def create_bill():
 # FIND BILL BY ID
 
 @app.route('/find_bill_by_id', methods=['GET'])
+@admin_or_user_required
 def find_bill_by_id():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or (role.role_name.lower() != "admin" and role.role_name.lower() != "user"):
-            return Response("You are not authorized to perform this action", status=403)
         data = request.get_json()
         bill_id = data.get('id')
 
@@ -386,30 +282,9 @@ def find_bill_by_id():
 # CREATE BILLS AND FRUITS
 
 @app.route('/register_bill_and_fruit', methods=['POST'])
+@admin_or_user_required
 def create_bill_and_fruit():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or (role.role_name.lower() != "admin" and role.role_name.lower() != "user"):
-            return Response("You are not authorized to perform this action", status=403)
-
         data = request.get_json()
         if None in (data.get('fruit_id'), data.get('user_id'), data.get('bill_id')):
             return Response("You must provide a fruit id, user id and bill id", status=400)
@@ -433,29 +308,10 @@ def create_bill_and_fruit():
 # FIND BILLS BY USER
 
 @app.route('/find_bills_by_user_id', methods=['GET'])
+@admin_or_user_required
 def find_bill_by_user():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or (role.role_name.lower() != "admin" and role.role_name.lower() != "user"):
-            return Response("You are not authorized to perform this action", status=403)
+        user_id = g.current_user_id
 
         if not user_id:
             return Response("You must provide a user id", status=400)
@@ -477,30 +333,9 @@ def find_bill_by_user():
 # CREATE CONTACT
 
 @app.route('/register_contact', methods=['POST'])
+@admin_or_user_required
 def create_contact():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or (role.role_name.lower() != "admin" and role.role_name.lower() != "user"):
-            return Response("You are not authorized to perform this action", status=403)
-        
         data = request.get_json()
         if None in (data.get('user_id'), data.get('name'), data.get('phone_number'), data.get('email')):
             return Response("You must provide a user id, name, phone number and email", status=400)
@@ -520,33 +355,15 @@ def create_contact():
 # FIND CONTACT BY USER_ID
 
 @app.route('/find_contacts_by_user_id', methods=['GET'])
+@admin_or_user_required
 def find_contact_by_user_id():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
+        user_id = g.current_user_id
 
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or (role.role_name.lower() != "admin" and role.role_name.lower() != "user"):
-            return Response("You are not authorized to perform this action", status=403)
-        
         contact_repo = ContactsRepository()
         result = contact_repo.get_contacts_by_user_id(user_id) #For this endpoint there is no need to specify the user_id in the body in postman as this value is taken directly from the decoded information
 
-        token = jwt_manager.encode({'id':user['id']})
+        token = jwt_manager.encode({'id':user_id})
 
         if result == []:
             return Response("No contacts found", status=404)
@@ -559,30 +376,9 @@ def find_contact_by_user_id():
 
 # LOGIN HISTORY (ADMIN ONLY)
 @app.route('/login-history', methods=['GET'])
+@admin_required
 def login_history():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-    
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-    
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-    
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or role.role_name.lower() != "admin":
-            return Response("You are not authorized to perform this action", status=403)
-
         data = request.get_json()
         target_user_id = data.get('user_id') if data else None
 
@@ -595,7 +391,7 @@ def login_history():
         if history == []:
             return Response("No login history found",status=404)
 
-        return jsonify(token=token)
+        return jsonify(history=history)
     except Exception as e:
         print("Error:", e)
         return Response("Internal server error", status=500)
@@ -603,32 +399,12 @@ def login_history():
 #DISPLAY ALL CONTACTS (FOR ADMIN USE ONLY)
 
 @app.route('/show_all_contacts_by_user_id', methods=['GET'])
+@admin_required
 def get_all_contacts():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or role.role_name.lower() != "admin":
-            return Response("You are not authorized to perform this action", status=403)
-        
         contact_repo = ContactsRepository()
         result = contact_repo.get_all_contacts()
-        token = jwt_manager.encode({'id':user['id']})
+        token = jwt_manager.encode({'id':g.current_user_id})
 
         if result == []:
             return Response("No contacts found", status=404)
@@ -641,30 +417,9 @@ def get_all_contacts():
 # UPDATE CONTACT
 
 @app.route('/edit_contact', methods=['PUT'])
+@admin_or_user_required
 def update_contact():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or (role.role_name.lower() not in ["admin", "user"]):
-            return Response("You are not authorized to perform this action", status=403)
-
         data = request.get_json()
 
         if None in (data.get('id'), data.get('name'), data.get('phone_number'), data.get('email')):
@@ -676,7 +431,7 @@ def update_contact():
         if contact_id is None:
             return Response("Contact not found", status=404)
 
-        if contact_id.user_id != user_id and role.role_name.lower() != "admin":
+        if contact_id.user_id != g.current_user_id and g.current_role.role_name.lower() != "admin":
             return Response("Unable to update this contact. Not found", status=404)
         
         contact_repo.update_contact(
@@ -699,37 +454,16 @@ def update_contact():
 # DELETE CONTACT
 
 @app.route('/remove_contact', methods=['DELETE'])
+@admin_or_user_required
 def delete_contact():
     try:
-        token = request.headers.get('Authorization')
-        if not token:
-            return Response("Missing token", status=403)
-        
-        token = token.replace("Bearer ", "")
-        decoded = jwt_manager.decode(token)
-
-        if decoded is None or 'id' not in decoded:
-            return Response("Invalid token", status=403)
-        
-        user_id = decoded['id']
-
-        user_repo = UsersRepository()
-        user = user_repo.get_user_by_id(user_id)
-        if user is None:
-            return Response("User not found", status=404)
-        
-        role_repo = RolesRepository()
-        role = role_repo.get_role_by_id(user['role'])
-        if role is None or (role.role_name.lower() != "admin" and role.role_name.lower() != "user"):
-            return Response("You are not authorized to perform this action", status=403)
-        
         data = request.get_json()
         contact_repo = ContactsRepository()
         contact_id = contact_repo.get_contact_by_id(data.get('id'))
         if contact_id is None:
             return Response("Contact not found", status=404)
 
-        if contact_id.user_id != user_id and role.role_name.lower() != "admin":
+        if contact_id.user_id != g.current_user_id and g.current_role.role_name.lower() != "admin":
             return Response("Unable to delete this contact. Not found", status=404)
         
         if (data.get('id') == None):
@@ -808,18 +542,11 @@ def refresh_token():
 
 
 @app.route('/me')
+@auth_required
 def me():
     try:
-        token = request.headers.get('Authorization')
-        if(token is not None):
-            token = token.replace("Bearer ","")
-            decoded = jwt_manager.decode(token)
-            user_id = decoded['id']
-            user_repo = UsersRepository()
-            user = user_repo.get_user_by_id(user_id)
-            return jsonify(id=user_id, username=user['username'])
-        else:
-            return Response("No user found", status=403)
+        user = g.current_user
+        return jsonify(id=g.current_user_id, username=user['username'])
     except Exception as e:
         return Response("Internal server error", status=500)
 
